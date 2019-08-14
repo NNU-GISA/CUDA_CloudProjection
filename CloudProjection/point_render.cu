@@ -192,7 +192,7 @@ namespace math
 
 __global__
 void DepthProject(float3 * point_clouds, int num_points,
-	CamIntrinsic* tar_intrinsic, CamPose* tar_Pose, int tar_width, int tar_height,
+	CamIntrinsic* tar_intrinsic, CamPose* tar_Pose, int tar_width, int tar_heigh,
 	int * mutex_map, 
 	float* out_depth, unsigned int* out_index)
 {
@@ -216,11 +216,16 @@ void DepthProject(float3 * point_clouds, int num_points,
 
 
 
-	float tdepth = camp.z;
+	float tdepth = -camp.z;
+
+	//if (tdepth < 0)
+	//	return;
 	camp = math::MatrixMul(_tarcamIntrinsic.getMatrix(), camp);
 
 	camp = camp / camp.w;
 	camp = camp / camp.z;
+
+
 
 	// splatting radius
 	float radius = 1; 
@@ -230,7 +235,7 @@ void DepthProject(float3 * point_clouds, int num_points,
 	{
 		for (int yy = round(camp.y - radius); yy <= round(camp.y + radius); ++yy)
 		{
-			if (xx < 0 || xx >= tar_width || yy < 0 || yy >= tar_height)
+			if (xx < 0 || xx >= tar_width || yy < 0 || yy >= tar_heigh)
 				return;
 
 			int ind = yy * tar_width + xx;
@@ -244,7 +249,7 @@ void DepthProject(float3 * point_clouds, int num_points,
 				if ((isSet = atomicCAS(mutex_map + ind, 0, 1)) == false)
 				{
 					// critical section goes here
-					if (out_depth[ind] > tdepth)
+					if (out_depth[ind] > tdepth || out_depth[ind]==0)
 					{
 						out_depth[ind] = tdepth;
 						out_index[ind] = ids;
@@ -262,17 +267,17 @@ void DepthProject(float3 * point_clouds, int num_points,
 }
 
 void GPU_DepthProject(cudaArray * point_clouds, int num_points,
-	cudaArray* tar_intrinsic, cudaArray* tar_Pose, int tar_width, int tar_height,
+	cudaArray* tar_intrinsic, cudaArray* tar_Pose, int tar_width, int tar_heigh,
 	int* mutex_map,
 	float* out_depth, unsigned int* out_index, cudaStream_t cuda_streams)
 {
 	dim3 dimBlock(128,1);
 	dim3 dimGrid(num_points / dimBlock.x + 1, 1);
 
-	cudaMemsetAsync(out_depth, 0, tar_width * tar_height * sizeof(float), cuda_streams);
+	cudaMemsetAsync(out_depth, 0, tar_width * tar_heigh * sizeof(float), cuda_streams);
 
 	DepthProject << <dimGrid, dimBlock, 0, cuda_streams >> > ((float3*)point_clouds, num_points,
-		(CamIntrinsic*)tar_intrinsic, (CamPose*)tar_Pose, tar_width, tar_height,
+		(CamIntrinsic*)tar_intrinsic, (CamPose*)tar_Pose, tar_width, tar_heigh,
 		mutex_map, 
 		out_depth, out_index );
 
