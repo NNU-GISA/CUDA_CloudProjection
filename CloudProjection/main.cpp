@@ -97,7 +97,7 @@ int main()
 
 	GPU_DepthProject(gpu_points, cnt,
 		gpu_intrinsic, gpu_campose,  tar_width,  tar_heigh,
-		gpu_mutex_map,
+		gpu_mutex_map,40,50, 2.5,
 		gpu_depthmap, out_index, 0);
 
 	float* cpu_depth = new float[tar_width * tar_heigh];

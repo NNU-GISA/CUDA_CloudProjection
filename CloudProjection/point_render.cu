@@ -193,7 +193,7 @@ namespace math
 __global__
 void DepthProject(float3 * point_clouds, int num_points,
 	CamIntrinsic* tar_intrinsic, CamPose* tar_Pose, int tar_width, int tar_heigh,
-	int * mutex_map, 
+	int * mutex_map, float near, float far, float max_splatting_size,
 	float* out_depth, unsigned int* out_index)
 {
 	int ids = blockDim.x * blockIdx.x + threadIdx.x; //  index of point
@@ -228,7 +228,14 @@ void DepthProject(float3 * point_clouds, int num_points,
 
 
 	// splatting radius
-	float radius = 1; 
+
+	float rate = (tdepth - near) / (far - near);
+	rate = 1.0 - rate;
+	rate = max(rate, 0.0);
+	rate = min(rate, 1.0);
+	
+
+	float radius = max_splatting_size * rate;
 
 	// splatting
 	for (int xx = round(camp.x - radius); xx <= round(camp.x + radius); ++xx)
@@ -252,7 +259,7 @@ void DepthProject(float3 * point_clouds, int num_points,
 					if (out_depth[ind] > tdepth || out_depth[ind]==0)
 					{
 						out_depth[ind] = tdepth;
-						out_index[ind] = ids;
+						out_index[ind] = ids + 1; // 0 denote empty
 					}
 				}
 				if (isSet)
@@ -268,17 +275,18 @@ void DepthProject(float3 * point_clouds, int num_points,
 
 void GPU_DepthProject(cudaArray * point_clouds, int num_points,
 	cudaArray* tar_intrinsic, cudaArray* tar_Pose, int tar_width, int tar_heigh,
-	int* mutex_map,
+	int* mutex_map, float near, float far, float max_splatting_size,
 	float* out_depth, unsigned int* out_index, cudaStream_t cuda_streams)
 {
 	dim3 dimBlock(128,1);
 	dim3 dimGrid(num_points / dimBlock.x + 1, 1);
 
 	cudaMemsetAsync(out_depth, 0, tar_width * tar_heigh * sizeof(float), cuda_streams);
+	cudaMemsetAsync(out_index, 0, tar_width * tar_heigh * sizeof(unsigned int), cuda_streams);
 
 	DepthProject << <dimGrid, dimBlock, 0, cuda_streams >> > ((float3*)point_clouds, num_points,
 		(CamIntrinsic*)tar_intrinsic, (CamPose*)tar_Pose, tar_width, tar_heigh,
-		mutex_map, 
+		mutex_map, near, far, max_splatting_size,
 		out_depth, out_index );
 
 }
