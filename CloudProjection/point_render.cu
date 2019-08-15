@@ -8,12 +8,12 @@ struct Matrix4x4
 {
 public:
 	float4 col[4];
-	__device__
+	__device__ __forceinline__
 		Matrix4x4()
 	{
 		col[0] = col[1] = col[2] = col[3] = make_float4(0, 0, 0, 0);
 	}
-	__device__
+	__device__ __forceinline__
 		Matrix4x4(float3 a, float3 b, float3 c, float3 d)
 	{
 		col[0].x = a.x;
@@ -37,7 +37,7 @@ public:
 		col[3].w = 1;
 	}
 
-	__device__
+	__device__ __forceinline__
 		Matrix4x4 transpose() const
 	{
 		Matrix4x4 res;
@@ -64,7 +64,7 @@ public:
 		return res;
 
 	}
-	__device__
+	__device__ __forceinline__
 		Matrix4x4 inv() const
 	{
 		Matrix4x4 res;
@@ -90,7 +90,7 @@ public:
 		return res;
 	}
 
-	__device__
+	__device__ __forceinline__
 		static	Matrix4x4 RotateX(float rad)
 	{
 		Matrix4x4 res;
@@ -122,7 +122,7 @@ public:
 typedef struct CamPoseNode
 {
 	float3 norm, Xaxis, Yaxis, offset;
-	__device__
+	__device__ __forceinline__
 		Matrix4x4 getRT() const
 	{
 		return Matrix4x4(Xaxis, Yaxis, norm, offset);
@@ -136,7 +136,7 @@ typedef struct CamIntrinsic
 {
 	float3 r[3];
 
-	__device__
+	__device__ __forceinline__
 		Matrix4x4 getMatrix(float scale = 1.0) const
 	{
 		Matrix4x4 res;
@@ -161,7 +161,7 @@ typedef struct CamIntrinsic
 		res.col[3].w = 1;
 		return res;
 	}
-	__device__
+	__device__ __forceinline__
 		float4 PointInverse(float x, float y, float scale = 1.0)
 	{
 		float xx = (x - r[0].z * scale) / (r[0].x * scale);
@@ -174,8 +174,8 @@ typedef struct CamIntrinsic
 
 namespace math
 {
-	__device__
-		float4 MatrixMul(const Matrix4x4& mat, float4& x)
+	__device__ __forceinline__
+	float4 MatrixMul(const Matrix4x4& mat, float4& x)
 	{
 		Matrix4x4 res = mat.transpose();
 		float4 ans;
@@ -194,7 +194,7 @@ __global__
 void DepthProject(float3 * point_clouds, int num_points,
 	CamIntrinsic* tar_intrinsic, CamPose* tar_Pose, int tar_width, int tar_heigh,
 	int * mutex_map, float near, float far, float max_splatting_size,
-	float* out_depth, unsigned int* out_index)
+	float* out_depth, int* out_index)
 {
 	int ids = blockDim.x * blockIdx.x + threadIdx.x; //  index of point
 
@@ -273,21 +273,31 @@ void DepthProject(float3 * point_clouds, int num_points,
 
 }
 
-void GPU_DepthProject(cudaArray * point_clouds, int num_points,
-	cudaArray* tar_intrinsic, cudaArray* tar_Pose, int tar_width, int tar_heigh,
-	int* mutex_map, float near, float far, float max_splatting_size,
-	float* out_depth, unsigned int* out_index, cudaStream_t cuda_streams)
+void GPU_PCPR(
+	torch::Tensor in_points, //(num_points,3)
+	torch::Tensor tar_intrinsic, torch::Tensor tar_Pose, 
+	float near, float far, float max_splatting_size,
+	torch::Tensor out_depth, torch::Tensor out_index) // (tar_heigh ,tar_width)
 {
+	const auto num_points = in_points.size(0);
+
 	dim3 dimBlock(256,1);
 	dim3 dimGrid(num_points / dimBlock.x + 1, 1);
 
-	cudaMemsetAsync(out_depth, 0, tar_width * tar_heigh * sizeof(float), cuda_streams);
-	cudaMemsetAsync(out_index, 0, tar_width * tar_heigh * sizeof(unsigned int), cuda_streams);
+	int tar_heigh = out_depth.size(0);
+	int tar_width = out_depth.size(1);
 
-	DepthProject << <dimGrid, dimBlock, 0, cuda_streams >> > ((float3*)point_clouds, num_points,
-		(CamIntrinsic*)tar_intrinsic, (CamPose*)tar_Pose, tar_width, tar_heigh,
+	int *mutex_map;
+	cudaMalloc(&mutex_map, sizeof(int) * tar_width *tar_heigh);
+	cudaMemset(mutex_map, 0, tar_width * tar_heigh * sizeof(int));
+
+
+	DepthProject << <dimGrid, dimBlock >> > (
+		(float3*)in_points.data<float>(), num_points,
+		(CamIntrinsic*)tar_intrinsic.data<float>(),(CamPose*)tar_Pose.data<float>(), tar_width, tar_heigh,
 		mutex_map, near, far, max_splatting_size,
-		out_depth, out_index );
+		out_depth.data<float>(), out_index.data<int>() );
 
+	cudaFree(mutex_map);
 }
 
