@@ -216,7 +216,7 @@ void DepthProject(float3 * point_clouds, int num_points,
 
 
 
-	float tdepth = -camp.z;
+	float tdepth = camp.z;
 
 	if (tdepth < 0)
 		return;
