@@ -218,8 +218,8 @@ void DepthProject(float3 * point_clouds, int num_points,
 
 	float tdepth = -camp.z;
 
-	//if (tdepth < 0)
-	//	return;
+	if (tdepth < 0)
+		return;
 	camp = math::MatrixMul(_tarcamIntrinsic.getMatrix(), camp);
 
 	camp = camp / camp.w;
@@ -245,7 +245,7 @@ void DepthProject(float3 * point_clouds, int num_points,
 			if (xx < 0 || xx >= tar_width || yy < 0 || yy >= tar_heigh)
 				return;
 
-			int ind = yy * tar_width + xx;
+			int ind = yy * tar_width + xx ;
 
 			if (out_depth[ind] > 0 && out_depth[ind] <= tdepth)
 				continue;
@@ -278,7 +278,7 @@ void GPU_DepthProject(cudaArray * point_clouds, int num_points,
 	int* mutex_map, float near, float far, float max_splatting_size,
 	float* out_depth, unsigned int* out_index, cudaStream_t cuda_streams)
 {
-	dim3 dimBlock(128,1);
+	dim3 dimBlock(256,1);
 	dim3 dimGrid(num_points / dimBlock.x + 1, 1);
 
 	cudaMemsetAsync(out_depth, 0, tar_width * tar_heigh * sizeof(float), cuda_streams);
