@@ -1,6 +1,7 @@
 #include <torch/extension.h>
 #include <vector>
 #include "point_render.cuh"
+#include <iostream>
 
 
 // CUDA forward declarations
@@ -40,7 +41,7 @@ std::vector<torch::Tensor> pcpr_cuda_forward(
   CHECK_INPUT(tar_intrinsic); CHECK_FLOAT(tar_intrinsic);
   CHECK_INPUT(tar_Pose); CHECK_FLOAT(tar_Pose);
   CHECK_INPUT(out_depth); CHECK_FLOAT(out_depth);
-  CHECK_INPUT(out_index); CHECK_Int(out_depth);
+  CHECK_INPUT(out_index); CHECK_FLOAT(out_depth);
 
   AT_ASSERTM(out_depth.size(0)== out_index.size(0), "out_depth and out_index must be the same size");
   AT_ASSERTM(out_depth.size(1)== out_index.size(1), "out_depth and out_index must be the same size");
@@ -73,6 +74,7 @@ std::vector<torch::Tensor> pcpr_cuda_backward(
 
   AT_ASSERTM(grad_feature_image.size(0)== index.size(0), "grad_feature_image and index must be the same batch size");
   AT_ASSERTM(index.size(0)== num_points.size(0), "grad_feature_image and num_points must be the same batch size");
+
 
   GPU_PCPR_backward(
     grad_feature_image, //(batch, dim, heigh, width)

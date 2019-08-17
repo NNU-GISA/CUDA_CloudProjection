@@ -304,15 +304,15 @@ void GPU_PCPR(
 
 
 __global__
-void PCPR_backward(float * grad_feature_image, int *index, int *num_points,
-		  float *out_grad_feature_points, float *out_grad_default_feature,
-		  int feature_dim, int num_batch, int width, int height, int total_sum)
+void PCPR_backward(float* grad_feature_image, int* index, int* num_points,
+	float* out_grad_feature_points, float* out_grad_default_feature,
+	int feature_dim, int num_batch, int width, int height, int total_sum)
 {
 	int x = blockDim.x * blockIdx.x + threadIdx.x; // width
 	int y = blockDim.y * blockIdx.y + threadIdx.y; // height
 
 
-	if ( y >= height || x >= width)
+	if (y >= height || x >= width)
 		return;
 
 	__shared__ int _num_points[16];
@@ -325,33 +325,35 @@ void PCPR_backward(float * grad_feature_image, int *index, int *num_points,
 
 
 	int beg = 0;
-	for (int i=0;i<num_batch;++i)
+	for (int i = 0; i < num_batch; ++i)
 	{
-		float * grad_feature_subimage = grad_feature_image + feature_dim*width*height * i
-						  + y * width + x ;
-		
-		int subindex = index[width*height * i + y*width +x] ;
+		float* grad_feature_subimage = grad_feature_image + feature_dim * width * height * i
+			+ y * width + x;
+
+		int subindex = index[width * height * i + y * width + x];
+
+
 		int num_points_sub = _num_points[i];
 
 		int point_index = beg + subindex;
 
-		float * out_grad_feature_points_sub = out_grad_feature_points + point_index * feature_dim;
+		float* out_grad_feature_points_sub = out_grad_feature_points + point_index;
 
-		if (point_index == beg + _num_points[i])
+		if (subindex == _num_points[i])
 		{ // default feature
-			for(int j=0;j<feature_dim;++j)
+			for (int j = 0; j < feature_dim; ++j)
 			{
-				atomicAdd(out_grad_default_feature + j, grad_feature_subimage[j * width*height]);
-			}
-		} else
-		{ // accumulate point gradient
-			for(int j=0;j<feature_dim;++j)
-			{
-				atomicAdd(out_grad_feature_points_sub + j * total_sum,
-					 grad_feature_subimage[j * width*height]);
+				atomicAdd(out_grad_default_feature + j, grad_feature_subimage[j * width * height]);
 			}
 		}
-		
+		else
+		{ // accumulate point gradient
+			for (int j = 0; j < feature_dim; ++j)
+			{
+				atomicAdd(out_grad_feature_points_sub + j * total_sum, grad_feature_subimage[j * width * height]);
+			}
+		}
+
 		beg += _num_points[i];
 	}
 
@@ -378,8 +380,8 @@ void GPU_PCPR_backward(
 	int height = index.size(1);
 	int width = index.size(2);
 
-	dim3 dimBlock(128,128);
-	dim3 dimGrid(height / dimBlock.x + 1, width / dimBlock.y + 1);
+	dim3 dimBlock(32,32,1);
+	dim3 dimGrid(height / dimBlock.x + 1, width / dimBlock.y + 1,1);
 
 
 	PCPR_backward<< <dimGrid, dimBlock >> >(grad_feature_image.data<float>(), index.data<int>(), num_points.data<int>(),
