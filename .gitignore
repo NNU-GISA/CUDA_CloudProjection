@@ -13,6 +13,7 @@
 dist/
 build/
 *.egg-info
+.ipynb_checkpoints/
 
 # User-specific files (MonoDevelop/Xamarin Studio)
 *.userprefs

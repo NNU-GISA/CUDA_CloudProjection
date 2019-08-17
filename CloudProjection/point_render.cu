@@ -192,7 +192,7 @@ namespace math
 
 __global__
 void DepthProject(float3 * point_clouds, int num_points,
-	CamIntrinsic* tar_intrinsic, CamPose* tar_Pose, int tar_width, int tar_heigh,
+	CamIntrinsic* tar_intrinsic, CamPose* tar_Pose, int tar_width, int tar_height,
 	int * mutex_map, float near, float far, float max_splatting_size,
 	float* out_depth, int* out_index)
 {
@@ -242,7 +242,7 @@ void DepthProject(float3 * point_clouds, int num_points,
 	{
 		for (int yy = round(camp.y - radius); yy <= round(camp.y + radius); ++yy)
 		{
-			if (xx < 0 || xx >= tar_width || yy < 0 || yy >= tar_heigh)
+			if (xx < 0 || xx >= tar_width || yy < 0 || yy >= tar_height)
 				return;
 
 			int ind = yy * tar_width + xx ;
@@ -277,27 +277,115 @@ void GPU_PCPR(
 	torch::Tensor in_points, //(num_points,3)
 	torch::Tensor tar_intrinsic, torch::Tensor tar_Pose, 
 	float near, float far, float max_splatting_size,
-	torch::Tensor out_depth, torch::Tensor out_index) // (tar_heigh ,tar_width)
+	torch::Tensor out_depth, torch::Tensor out_index) // (tar_height ,tar_width)
 {
 	const auto num_points = in_points.size(0);
 
 	dim3 dimBlock(256,1);
 	dim3 dimGrid(num_points / dimBlock.x + 1, 1);
 
-	int tar_heigh = out_depth.size(0);
+	int tar_height = out_depth.size(0);
 	int tar_width = out_depth.size(1);
 
 	int *mutex_map;
-	cudaMalloc(&mutex_map, sizeof(int) * tar_width *tar_heigh);
-	cudaMemset(mutex_map, 0, tar_width * tar_heigh * sizeof(int));
+	cudaMalloc(&mutex_map, sizeof(int) * tar_width *tar_height);
+	cudaMemset(mutex_map, 0, tar_width * tar_height * sizeof(int));
 
 
 	DepthProject << <dimGrid, dimBlock >> > (
 		(float3*)in_points.data<float>(), num_points,
-		(CamIntrinsic*)tar_intrinsic.data<float>(),(CamPose*)tar_Pose.data<float>(), tar_width, tar_heigh,
+		(CamIntrinsic*)tar_intrinsic.data<float>(),(CamPose*)tar_Pose.data<float>(), tar_width, tar_height,
 		mutex_map, near, far, max_splatting_size,
 		out_depth.data<float>(), out_index.data<int>() );
 
 	cudaFree(mutex_map);
+}
+
+
+
+__global__
+void PCPR_backward(float * grad_feature_image, int *index, int *num_points,
+		  float *out_grad_feature_points, float *out_grad_default_feature,
+		  int feature_dim, int num_batch, int width, int height, int total_sum)
+{
+	int x = blockDim.x * blockIdx.x + threadIdx.x; // width
+	int y = blockDim.y * blockIdx.y + threadIdx.y; // height
+
+
+	if ( y >= height || x >= width)
+		return;
+
+	__shared__ int _num_points[16];
+
+
+	if (threadIdx.x < num_batch && threadIdx.y == 0) {
+		_num_points[threadIdx.x] = *(num_points + threadIdx.x);
+	}
+	__syncthreads();
+
+
+	int beg = 0;
+	for (int i=0;i<num_batch;++i)
+	{
+		float * grad_feature_subimage = grad_feature_image + feature_dim*width*height * i
+						  + y * width + x ;
+		
+		int subindex = index[width*height * i + y*width +x] ;
+		int num_points_sub = _num_points[i];
+
+		int point_index = beg + subindex;
+
+		float * out_grad_feature_points_sub = out_grad_feature_points + point_index * feature_dim;
+
+		if (point_index == beg + _num_points[i])
+		{ // default feature
+			for(int j=0;j<feature_dim;++j)
+			{
+				atomicAdd(out_grad_default_feature + j, grad_feature_subimage[j * width*height]);
+			}
+		} else
+		{ // accumulate point gradient
+			for(int j=0;j<feature_dim;++j)
+			{
+				atomicAdd(out_grad_feature_points_sub + j * total_sum,
+					 grad_feature_subimage[j * width*height]);
+			}
+		}
+		
+		beg += _num_points[i];
+	}
+
+}
+
+
+
+
+void GPU_PCPR_backward(
+    torch::Tensor grad_feature_image, //(batch, dim, height, width)
+    torch::Tensor index,        //(batch, height, width)
+    torch::Tensor num_points,     // (batch)
+    torch::Tensor out_grad_feature_points, // (dim, total points)
+	torch::Tensor out_grad_default_feature, // (dim, 1)
+	int total_num
+    )
+{
+	int num_batch = num_points.size(0);
+	int feature_dim = out_grad_feature_points.size(0);
+
+	cudaMemset(out_grad_feature_points.data<float>(), 0, sizeof(float)*feature_dim*out_grad_feature_points.size(1));
+	cudaMemset(out_grad_default_feature.data<float>(), 0, sizeof(float)*feature_dim*out_grad_default_feature.size(1));
+
+	int height = index.size(1);
+	int width = index.size(2);
+
+	dim3 dimBlock(128,128);
+	dim3 dimGrid(height / dimBlock.x + 1, width / dimBlock.y + 1);
+
+
+	PCPR_backward<< <dimGrid, dimBlock >> >(grad_feature_image.data<float>(), index.data<int>(), num_points.data<int>(),
+		  out_grad_feature_points.data<float>(), out_grad_default_feature.data<float>(),
+		  feature_dim, num_batch, width, height, total_num);
+
+
 }
 
