@@ -191,21 +191,21 @@ namespace math
 
 
 __global__
-void DepthProject(float3 * point_clouds, int num_points,
-	CamIntrinsic* tar_intrinsic, CamPose* tar_Pose, int tar_width, int tar_heigh,
-	int * mutex_map, float near, float far, float max_splatting_size,
-	float* out_depth, unsigned int* out_index)
+void DepthProject(float3* point_clouds, int num_points,
+	CamIntrinsic* tar_intrinsic, CamPose* tar_Pose, int tar_width, int tar_height,
+	int* mutex_map, float near, float far, float max_splatting_size,
+	float* out_depth, int* out_index)
 {
 	int ids = blockDim.x * blockIdx.x + threadIdx.x; //  index of point
 
 
-	if (ids > num_points) 
+	if (ids > num_points)
 		return;
 
 
 	// Cache camera parameters
-	 CamPose _tarcamPose = *tar_Pose;
-	 CamIntrinsic _tarcamIntrinsic = *tar_intrinsic;
+	CamPose _tarcamPose = *tar_Pose;
+	CamIntrinsic _tarcamIntrinsic = *tar_intrinsic;
 
 
 	float4 p = make_float4(point_clouds[ids], 1.0);
@@ -216,7 +216,7 @@ void DepthProject(float3 * point_clouds, int num_points,
 
 
 
-	float tdepth = -camp.z;
+	float tdepth = camp.z;
 
 	if (tdepth < 0)
 		return;
@@ -233,7 +233,7 @@ void DepthProject(float3 * point_clouds, int num_points,
 	rate = 1.0 - rate;
 	rate = max(rate, 0.0);
 	rate = min(rate, 1.0);
-	
+
 
 	float radius = max_splatting_size * rate;
 
@@ -242,10 +242,10 @@ void DepthProject(float3 * point_clouds, int num_points,
 	{
 		for (int yy = round(camp.y - radius); yy <= round(camp.y + radius); ++yy)
 		{
-			if (xx < 0 || xx >= tar_width || yy < 0 || yy >= tar_heigh)
+			if (xx < 0 || xx >= tar_width || yy < 0 || yy >= tar_height)
 				return;
 
-			int ind = yy * tar_width + xx ;
+			int ind = yy * tar_width + xx;
 
 			if (out_depth[ind] > 0 && out_depth[ind] <= tdepth)
 				continue;
@@ -256,7 +256,7 @@ void DepthProject(float3 * point_clouds, int num_points,
 				if ((isSet = atomicCAS(mutex_map + ind, 0, 1)) == false)
 				{
 					// critical section goes here
-					if (out_depth[ind] > tdepth || out_depth[ind]==0)
+					if (out_depth[ind] > tdepth || out_depth[ind] == 0)
 					{
 						out_depth[ind] = tdepth;
 						out_index[ind] = ids + 1; // 0 denote empty
@@ -272,11 +272,10 @@ void DepthProject(float3 * point_clouds, int num_points,
 	}
 
 }
-
 void GPU_DepthProject(cudaArray * point_clouds, int num_points,
 	cudaArray* tar_intrinsic, cudaArray* tar_Pose, int tar_width, int tar_heigh,
 	int* mutex_map, float near, float far, float max_splatting_size,
-	float* out_depth, unsigned int* out_index, cudaStream_t cuda_streams)
+	float* out_depth, int* out_index, cudaStream_t cuda_streams)
 {
 	dim3 dimBlock(256,1);
 	dim3 dimGrid(num_points / dimBlock.x + 1, 1);
@@ -291,3 +290,98 @@ void GPU_DepthProject(cudaArray * point_clouds, int num_points,
 
 }
 
+__global__
+void PCPR_backward(float* grad_feature_image, int* index, int* num_points,
+	float* out_grad_feature_points, float* out_grad_default_feature,
+	int feature_dim, int num_batch, int width, int height, int total_sum)
+{
+	int x = blockDim.x * blockIdx.x + threadIdx.x; // width
+	int y = blockDim.y * blockIdx.y + threadIdx.y; // height
+
+
+	if (y >= height || x >= width)
+		return;
+
+	__shared__ int _num_points[16];
+
+
+	if (threadIdx.x < num_batch && threadIdx.y == 0) {
+		_num_points[threadIdx.x] = *(num_points + threadIdx.x);
+	}
+	__syncthreads();
+
+
+	int beg = 0;
+	for (int i = 0; i < num_batch; ++i)
+	{
+		float* grad_feature_subimage = grad_feature_image + feature_dim * width * height * i
+			+ y * width + x;
+
+		int subindex = index[width * height * i + y * width + x];
+		/*
+
+		if (subindex == 0)
+		{
+			subindex = _num_points[i];
+		}
+		else
+		{
+			subindex--;
+		}
+		*/
+		int num_points_sub = _num_points[i];
+
+		int point_index = beg + subindex;
+
+		float* out_grad_feature_points_sub = out_grad_feature_points + point_index;
+
+		if (subindex == _num_points[i])
+		{ // default feature
+			for (int j = 0; j < feature_dim; ++j)
+			{
+				atomicAdd(out_grad_default_feature + j, grad_feature_subimage[j * width * height]);
+			}
+		}
+		else
+		{ // accumulate point gradient
+			for (int j = 0; j < feature_dim; ++j)
+			{
+				atomicAdd(out_grad_feature_points_sub + j * total_sum, grad_feature_subimage[j * width * height]);
+			}
+		}
+
+		beg += _num_points[i];
+	}
+
+}
+
+
+
+
+void GPU_PCPR_backward(
+	cudaArray* grad_feature_image, //(batch, dim, height, width)
+	cudaArray* index,        //(batch, height, width)
+	cudaArray* num_points,     // (batch)
+	cudaArray* out_grad_feature_points, // (dim, total points)
+	cudaArray* out_grad_default_feature, // (dim, 1)
+	int height, int width,
+	int num_batch, int feature_dim, int total_num
+)
+{
+
+
+	cudaMemset(out_grad_feature_points, 0, sizeof(float) * feature_dim * total_num);
+	cudaMemset(out_grad_default_feature, 0, sizeof(float) * feature_dim * 1);
+
+
+	dim3 dimBlock(32, 32,1);
+	dim3 dimGrid(height / dimBlock.x + 1, width / dimBlock.y + 1,1);
+
+
+
+	PCPR_backward << <dimGrid, dimBlock >> > ((float *)grad_feature_image, (int*)index, (int*)num_points,
+		(float *)out_grad_feature_points, (float *)out_grad_default_feature,
+		feature_dim, num_batch, width, height, total_num);
+
+
+}
