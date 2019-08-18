@@ -86,7 +86,7 @@ std::vector<torch::Tensor> pcpr_cuda_backward(
     );
 
 
-  return {out_grad_feature_points};
+  return {out_grad_feature_points, out_grad_default_feature};
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
